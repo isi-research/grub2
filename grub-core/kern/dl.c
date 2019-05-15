@@ -17,6 +17,13 @@
  *  along with GRUB.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+/*
+ *  Copyright 2017-2019, Intuitive Surgical Operations, Inc. All rights reserved.
+ *
+ *  This source code is licensed under the GPLv3 license found in
+ *  the COPYING file in the root directory of this source tree.
+ */
+
 /* Force native word size */
 #define GRUB_TARGET_WORDSIZE (8 * GRUB_CPU_SIZEOF_VOID_P)
 
@@ -36,6 +43,10 @@
 /* Platforms where modules are in a readonly area of memory.  */
 #if defined(GRUB_MACHINE_QEMU)
 #define GRUB_MODULES_MACHINE_READONLY
+#endif
+
+#ifdef GRUB_MACHINE_EFI
+#include <grub/efi/efi.h>
 #endif
 
 
@@ -685,6 +696,15 @@ grub_dl_load_file (const char *filename)
   grub_ssize_t size;
   void *core = 0;
   grub_dl_t mod = 0;
+
+#ifdef GRUB_MACHINE_EFI
+  if (grub_efi_secure_boot ())
+    {
+      grub_error (GRUB_ERR_ACCESS_DENIED,
+		  "Secure Boot forbids loading module from %s", filename);
+      return 0;
+    }
+#endif
 
   grub_boot_time ("Loading module %s", filename);
 

@@ -1,3 +1,9 @@
+/*
+ *  Copyright 2017-2019, Intuitive Surgical Operations, Inc. All rights reserved.
+ *
+ *  This source code is licensed under the GPLv3 license found in
+ *  the COPYING file in the root directory of this source tree.
+ */
 #include <grub/types.h>
 #include <grub/err.h>
 #include <grub/linux.h>
@@ -244,6 +250,65 @@ grub_initrd_close (struct grub_linux_initrd_context *initrd_ctx)
   initrd_ctx->components = 0;
 }
 
+typedef struct {
+    grub_off_t size;
+    grub_off_t bytes_read;
+    int last_progress;
+} progress_data_t;
+static progress_data_t initrd_progress_data;
+
+static void init_progress_data(progress_data_t* progress_data, grub_off_t size)
+{
+    if(progress_data)
+    {
+        progress_data->size = size;
+        progress_data->bytes_read = 0;
+        // this is so that progress 0 will show up once.
+        progress_data->last_progress = -1;
+    }
+}
+
+#define PROGRESS_TICK       5
+#define NEWLINE_TICK        50
+
+static void initrd_read_hook(grub_disk_addr_t sector,
+				       unsigned offset, unsigned length,
+				       void *data)
+{
+    progress_data_t* progress_data; 
+    int progress ;
+
+    // sanitize the data
+    if(!data)
+    {
+        return;
+    }
+
+    progress_data = (progress_data_t*)(data);
+
+    // just to satisy the grub compiler, which I assume has some 
+    // sort of static analyzer
+    sector = sector;
+    offset = offset;
+
+    progress_data->bytes_read += length;
+
+    progress = (int)((100 * progress_data->bytes_read)/(progress_data->size));
+
+    // this should be safe.  grub_off_t is a uint64
+    if((0 == (progress % PROGRESS_TICK)) && (progress != progress_data->last_progress))
+    {
+        progress_data->last_progress = progress;
+
+        grub_printf(".%02d", progress);
+
+        if( progress && (0 == (progress % NEWLINE_TICK)))
+        {
+            grub_printf("\n");
+        }
+    }
+}
+
 grub_err_t
 grub_initrd_load (struct grub_linux_initrd_context *initrd_ctx,
 		  char *argv[], void *target)
@@ -279,6 +344,12 @@ grub_initrd_load (struct grub_linux_initrd_context *initrd_ctx,
 	}
 
       cursize = initrd_ctx->components[i].size;
+
+      init_progress_data(&initrd_progress_data, cursize);
+      initrd_ctx->components[i].file->read_hook = initrd_read_hook;
+
+      initrd_ctx->components[i].file->read_hook_data = (void*)(&initrd_progress_data);
+
       if (grub_file_read (initrd_ctx->components[i].file, ptr, cursize)
 	  != cursize)
 	{

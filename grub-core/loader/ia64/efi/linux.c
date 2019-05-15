@@ -16,6 +16,13 @@
  *  along with GRUB.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+/*
+ *  Copyright 2017-2019, Intuitive Surgical Operations, Inc. All rights reserved.
+ *
+ *  This source code is licensed under the GPLv3 license found in
+ *  the COPYING file in the root directory of this source tree.
+ */
+
 #include <grub/loader.h>
 #include <grub/file.h>
 #include <grub/disk.h>
@@ -490,6 +497,8 @@ grub_cmd_linux (grub_command_t cmd __attribute__ ((unused)),
   char *cmdline, *p;
   grub_ssize_t len;
   int i;
+
+  grub_puts("grub_cmd_linux: loader/ia64/efi/linux.c");
 
   grub_dl_ref (my_mod);
 

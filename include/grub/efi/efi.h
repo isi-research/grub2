@@ -17,6 +17,13 @@
  *  along with GRUB.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+/*
+ *  Copyright 2017-2019, Intuitive Surgical Operations, Inc. All rights reserved.
+ *
+ *  This source code is licensed under the GPLv3 license found in
+ *  the COPYING file in the root directory of this source tree.
+ */
+
 #ifndef GRUB_EFI_EFI_HEADER
 #define GRUB_EFI_EFI_HEADER	1
 
@@ -73,6 +80,7 @@ EXPORT_FUNC (grub_efi_set_variable) (const char *var,
 				     const grub_efi_guid_t *guid,
 				     void *data,
 				     grub_size_t datasize);
+grub_efi_boolean_t EXPORT_FUNC (grub_efi_secure_boot) (void);
 int
 EXPORT_FUNC (grub_efi_compare_device_paths) (const grub_efi_device_path_t *dp1,
 					     const grub_efi_device_path_t *dp2);

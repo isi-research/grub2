@@ -16,6 +16,13 @@
  *  along with GRUB.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+/*
+ *  Copyright 2017-2019, Intuitive Surgical Operations, Inc. All rights reserved.
+ *
+ *  This source code is licensed under the GPLv3 license found in
+ *  the COPYING file in the root directory of this source tree.
+ */
+
 #include <grub/loader.h>
 #include <grub/memory.h>
 #include <grub/normal.h>
@@ -687,6 +694,8 @@ grub_cmd_linux (grub_command_t cmd __attribute__ ((unused)),
   int relocatable;
   grub_uint64_t preferred_address = GRUB_LINUX_BZIMAGE_ADDR;
 
+  grub_puts("grub_cmd_linux: loader/i386/linux.c"); 
+
   grub_dl_ref (my_mod);
 
   if (argc == 0)
@@ -847,8 +856,10 @@ grub_cmd_linux (grub_command_t cmd __attribute__ ((unused)),
       ((grub_addr_t) grub_efi_system_table >> 32) != 0)
     return grub_error(GRUB_ERR_BAD_OS,
 		      "kernel does not support 64-bit addressing");
+  grub_puts("GRUB_MACHINE_EFI and __x86_64__ are both defined");
 #endif
-
+  
+  grub_printf("grub_cmd_linux: linux_params.version = %d\n", grub_le_to_cpu16 (linux_params.version));
   if (grub_le_to_cpu16 (linux_params.version) >= 0x0208)
     {
       linux_params.v0208.efi_signature = GRUB_LINUX_EFI_SIGNATURE;

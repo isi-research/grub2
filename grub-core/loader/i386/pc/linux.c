@@ -17,6 +17,13 @@
  *  along with GRUB.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+/*
+ *  Copyright 2017-2019, Intuitive Surgical Operations, Inc. All rights reserved.
+ *
+ *  This source code is licensed under the GPLv3 license found in
+ *  the COPYING file in the root directory of this source tree.
+ */
+
 #include <grub/loader.h>
 #include <grub/file.h>
 #include <grub/err.h>
@@ -130,6 +137,8 @@ grub_cmd_linux (grub_command_t cmd __attribute__ ((unused)),
   int grub_linux_is_bzimage;
   grub_addr_t grub_linux_prot_target;
   grub_err_t err;
+
+  grub_puts(  "grub_cmd_linux: loader/i386/pc/linux.c");
 
   grub_dl_ref (my_mod);
 

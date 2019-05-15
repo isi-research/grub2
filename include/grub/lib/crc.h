@@ -17,9 +17,17 @@
  *  along with GRUB.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+/*
+ *  Copyright 2017-2019, Intuitive Surgical Operations, Inc. All rights reserved.
+ *
+ *  This source code is licensed under the GPLv3 license found in
+ *  the COPYING file in the root directory of this source tree.
+ */
+
 #ifndef GRUB_CRC_H
 #define GRUB_CRC_H	1
 
 grub_uint32_t grub_getcrc32c (grub_uint32_t crc, const void *buf, int size);
+grub_uint16_t grub_getcrc16 (grub_uint16_t crc, const void *buf, int size);
 
 #endif /* ! GRUB_CRC_H */
