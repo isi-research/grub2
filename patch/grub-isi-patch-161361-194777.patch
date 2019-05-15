@@ -101,8 +101,21 @@ Index: grub-core/Makefile.core.def
  };
 +
 +module = {
++  name = validateimgs;
++  common = isi/validateimgs.c;
++};
++
++module = {
 +  name = isimath;
 +  common = isi/isimath.c;
++};
++
++module = {
++  name = validateimgsig;
++  common = isi/validateimgsig.c;
++  common = isi/isi_key.c;
++  cflags = '$(CFLAGS_POSIX)';
++  cppflags = '-I$(srcdir)/lib/posix_wrap';
 +};
 +
 Index: grub-core/lib/crc.c
@@ -355,6 +368,1085 @@ Index: grub-core/isi/isimath.c
 +    grub_unregister_extcmd (cmd_inc);
 +    grub_unregister_extcmd (cmd_dec);
 +}
+Index: grub-core/isi/isi_key.h
+===================================================================
+--- grub-core/isi/isi_key.h	(revision 0)
++++ grub-core/isi/isi_key.h	(revision 194777)
+@@ -0,0 +1,12 @@
++
++#ifndef _ISI_KEY_H_
++#define _ISI_KEY_H_
++
++#define ISI_MODULUS_LENGTH  512
++#define ISI_EXPONENT_LENGTH 4
++
++extern unsigned char isi_modulus[];
++
++extern unsigned char isi_exponent[];
++
++#endif
+Index: grub-core/isi/validateimgs.c
+===================================================================
+--- grub-core/isi/validateimgs.c	(revision 0)
++++ grub-core/isi/validateimgs.c	(revision 194777)
+@@ -0,0 +1,491 @@
++/* cat.c - command to show the contents of a file  */
++/*
++ *  GRUB  --  GRand Unified Bootloader
++ *  Copyright (C) 2003,2005,2007,2008  Free Software Foundation, Inc.
++ *
++ *  GRUB is free software: you can redistribute it and/or modify
++ *  it under the terms of the GNU General Public License as published by
++ *  the Free Software Foundation, either version 3 of the License, or
++ *  (at your option) any later version.
++ *
++ *  GRUB is distributed in the hope that it will be useful,
++ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
++ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ *  GNU General Public License for more details.
++ *
++ *  You should have received a copy of the GNU General Public License
++ *  along with GRUB.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++#include <grub/dl.h>
++#include <grub/file.h>
++#include <grub/disk.h>
++#include <grub/term.h>
++#include <grub/misc.h>
++#include <grub/extcmd.h>
++#include <grub/env.h>
++#include <grub/lib/crc.h>
++
++GRUB_MOD_LICENSE ("GPLv3+");
++
++#define STATE_READING_HEADER        0
++#define STATE_READING_IMAGE_NAME    1
++#define STATE_READING_FOOTER_SIZE   2
++#define STATE_READING_IMAGE_VER     3
++#define STATE_READING_IMAGE_CRC     4
++
++#define CRC16_SEED_VALUE    0xFFFF
++
++#define ISI_CRC16_PAD       4
++
++typedef struct _grub_isi_image_stats
++{
++    const char* file_name;
++    // this is the number of bytes at the end of of the 
++    // file that should be ignored when calculating the 
++    // checksum
++    int footer_size;
++    int version;
++    int crc16;
++} grub_isi_image_stats_t;
++
++typedef enum _grub_isi_validate_algo
++{
++    GRUB_ISI_VALIDATE_ALGO_CRC16, 
++    GRUB_ISI_VALIDATE_ALGO_BSD
++} grub_isi_validate_algo_t;
++
++static const struct grub_arg_option options[] =
++{
++    {"set", 's', 0, N_("set"), N_("SET"), ARG_TYPE_STRING},
++    {"algo",'s', 0, N_("set"), N_("SET"), ARG_TYPE_STRING},
++    {0, 0, 0, 0, 0, 0}
++};
++
++
++static unsigned char buffer_[GRUB_DISK_SECTOR_SIZE];
++
++static grub_err_t grub_isi_crunch_file(grub_file_t file, grub_isi_validate_algo_t algo, grub_uint64_t total_bytes_to_read, grub_uint64_t pad_size, grub_uint16_t *checksum)
++{
++    grub_ssize_t size;
++
++    if(pad_size)
++    {
++        if(total_bytes_to_read % pad_size)
++        {
++            pad_size -= (total_bytes_to_read % pad_size);
++            //grub_printf("need to pad crc w/ %lu bytes\n", pad_size);
++        }
++        else
++        {
++            pad_size = 0;
++        }
++    }
++
++    while( total_bytes_to_read + pad_size )
++    {
++        
++        // read buffer size bytes (fill up the buffer) unless 
++        // I have fewer bytes left to read
++        if(total_bytes_to_read)
++        {
++            size = grub_file_read(file, buffer_,
++                (sizeof(buffer_) < total_bytes_to_read) ? sizeof(buffer_) : total_bytes_to_read );
++
++            total_bytes_to_read -= size;
++        }
++        else
++        {
++            size = pad_size;
++            while(pad_size)
++            {
++                buffer_[--pad_size] = 0;
++
++            }
++        }
++
++        switch(algo)
++        {
++            case GRUB_ISI_VALIDATE_ALGO_CRC16:
++                *checksum = grub_getcrc16(*checksum, buffer_, size);
++                break;
++
++            case GRUB_ISI_VALIDATE_ALGO_BSD:
++            {
++                int i;
++                for( i = 0; i < size; i++ )
++                {
++                    *checksum = (*checksum >> 1) + ((*checksum & 1) << 15);
++                    *checksum += buffer_[i];
++                    *checksum &= 0xffff;    /* Keep it within bounds. */
++                }
++
++                break;
++            }
++
++            default:
++                grub_printf("WARNING: UNRECOGNIZED ALGO TYPE: %d\n", (int)algo);
++                break;
++        }
++    }
++
++    return GRUB_ERR_NONE;
++}
++
++static grub_err_t grub_isi_validate(grub_isi_image_stats_t* image_stats, grub_isi_validate_algo_t algo)
++{
++    grub_file_t file;
++    grub_uint16_t checksum = 0;
++    grub_uint64_t total_bytes_to_read;
++
++    grub_printf("img %s, expect crc = 0x%04x, algo=%s, ftr=%d\n", 
++        image_stats->file_name, image_stats->crc16, 
++        algo == GRUB_ISI_VALIDATE_ALGO_CRC16 ? "crc16" : "bsd", 
++        image_stats->footer_size);
++
++    // initialize the checksum
++    switch(algo)
++    {
++        case GRUB_ISI_VALIDATE_ALGO_CRC16:
++            checksum = CRC16_SEED_VALUE;
++            break;
++
++        case GRUB_ISI_VALIDATE_ALGO_BSD:
++            checksum = 0;
++            break;
++
++        default:
++            break;
++    }
++
++    // check to see if there is an existing "header file" .hdr
++    grub_snprintf(
++        (char*)buffer_, 
++        (GRUB_DISK_SECTOR_SIZE - 1), 
++        "%s.hdr", 
++        image_stats->file_name);
++
++    file = grub_file_open((char*)buffer_);
++    if( file )
++    {
++        grub_isi_crunch_file(file, algo, file->size, ISI_CRC16_PAD, &checksum);
++
++        grub_file_close(file);
++    }
++    else
++    {
++        // clear this error.  I am not interested in the error
++        // message telling me that the file does not exist.
++        grub_error_pop();
++    }
++
++    // grub_file_open has some "filters" for certain types of 
++    // files, especially compressed files.  It will automatically
++    // uncompress files that match a filter.
++    // grub_file_open will restore the filters at the end of the 
++    // function.  Therefore, you need to disable the filters once 
++    // before EACH call to grub_file_open.  Unless of course, 
++    // you want grub to decompress for you...
++    grub_file_filter_disable_all();
++
++    file = grub_file_open(image_stats->file_name);
++    if( ! file )
++    {
++        return grub_errno;
++    }
++
++    total_bytes_to_read = file->size - image_stats->footer_size;
++
++    // calc the checksum
++    grub_isi_crunch_file(file, algo, total_bytes_to_read, ISI_CRC16_PAD, &checksum);
++
++    grub_file_close(file);
++
++    // do they match?
++    if( checksum == image_stats->crc16 )
++    {
++        grub_printf("checksums match\n");
++
++    }
++    else
++    {
++        grub_printf("MISMATCH: calc 0x%04x\n", checksum);
++
++        return GRUB_ERR_TEST_FAILURE;
++    }
++
++    return GRUB_ERR_NONE;
++}
++
++static grub_err_t
++grub_cmd_crc16(grub_extcmd_context_t ctxt, int argc, char **args)
++{
++    grub_err_t status;
++    grub_file_t file;
++    grub_uint16_t checksum = CRC16_SEED_VALUE;
++    struct grub_arg_list *state = ctxt->state;
++    
++    if(! state)
++    {
++        return grub_error (GRUB_ERR_BAD_ARGUMENT, N_("FAILED TO PARSE ARGS"));
++    }
++	
++
++    if(1 != argc)
++    {
++        return grub_error (GRUB_ERR_BAD_ARGUMENT, N_("EXPECTED SINGLE ARG FOR FILE"));
++    }
++
++    // open the file
++    file = grub_file_open (args[0]);
++
++    if (! file)
++    {
++        return grub_errno;
++    }
++
++    status = grub_isi_crunch_file(file, GRUB_ISI_VALIDATE_ALGO_CRC16, file->size, ISI_CRC16_PAD, &checksum);
++    if(GRUB_ERR_NONE == status)
++    {
++        grub_printf("0x%04x\n", checksum);
++    }
++
++    grub_file_close(file);
++
++    return status;
++}
++
++static grub_err_t
++grub_cmd_validateimgs (grub_extcmd_context_t ctxt, int argc, char **args)
++{
++    int parse_state = STATE_READING_HEADER;
++    int i;
++    struct grub_arg_list *state = ctxt->state;
++    grub_file_t file;
++    unsigned char buf[GRUB_DISK_SECTOR_SIZE];
++    unsigned char image_file[256];
++    unsigned char image_ver[16];
++    unsigned char image_crc[10];
++    unsigned char footer_size[8] = {0}; // initialize w/ a null string
++    unsigned char* file_src = 0;
++    unsigned char* file_dest = 0;
++    unsigned char* path_end;
++    grub_isi_image_stats_t image_stats;
++    grub_ssize_t size;
++    grub_uint32_t fail_count = 0;
++    grub_isi_validate_algo_t algo = GRUB_ISI_VALIDATE_ALGO_CRC16;
++
++    int key = GRUB_TERM_NO_KEY;
++
++    int pos = 0;
++
++    if(state[1].set)
++    {
++        if( (0 == grub_strcmp("crc16", state[1].arg ) ) ||
++            (0 == grub_strcmp("crc", state[1].arg ) ) )
++        {
++            algo = GRUB_ISI_VALIDATE_ALGO_CRC16;
++        }
++        else if(
++            (0 == grub_strcmp("bsd", state[1].arg ) )
++        )
++        {
++            algo = GRUB_ISI_VALIDATE_ALGO_BSD;
++        }
++        else
++        {
++            // error
++            return grub_error (GRUB_ERR_BAD_ARGUMENT, N_("EXPECTED ALGO TO BE crc16 or bsd"));
++        }
++    }
++
++    if (argc != 1)
++    {
++        return grub_error (GRUB_ERR_BAD_ARGUMENT, N_("filename expected"));
++    }
++    
++    file = grub_file_open (args[0]);
++
++    if (! file)
++    {
++        return grub_errno;
++    }
++
++    // copy over the file while noting the last /
++    file_src = (unsigned char*)args[0];
++    path_end = file_src;
++    file_dest = &image_file[0];
++    do
++    {
++        if( (*file_dest++ = *file_src++) == '/' )
++        {
++            path_end = file_dest;
++        }
++
++    } while( *file_src );
++
++    // reset file_dest to be ready to start after the last path separator /
++    file_dest = path_end;
++    image_stats.file_name = (const char*)image_file;
++
++    while ((size = grub_file_read (file, buf, sizeof (buf))) > 0 && key != GRUB_TERM_ESC)
++    {
++        for (i = 0; i < size; i++)
++        {
++            switch(parse_state)
++            {
++                case STATE_READING_HEADER:
++                    if (buf[i] == '\n')
++                    {
++                        parse_state = STATE_READING_IMAGE_NAME;
++                    }
++                    break;
++
++                case STATE_READING_IMAGE_NAME:
++                    if(buf[i] == '\n')
++                    {
++                        // TODO: illegal character.  raise error
++                    }
++                    else if( ' ' == buf[i] )
++                    {
++                        // TODO: WHITESPACE NOT ALLOWED.  raise error
++
++
++                    }
++                    else if( '\t' == buf[i] )
++                    {
++                        parse_state = STATE_READING_FOOTER_SIZE;
++                        pos = 0;
++                        *file_dest = 0;
++                    }
++                    else
++                    {
++                        *file_dest++ = buf[i];
++                    }
++                    break;
++
++                case STATE_READING_FOOTER_SIZE:
++                    if(buf[i] == '\n')
++                    {
++                        // TODO: illegal character.  raise error
++                    }
++                    else if( '\t' == buf[i] )
++                    {
++                        parse_state = STATE_READING_IMAGE_VER;
++                        footer_size[pos] = 0;
++                        pos = 0;
++                    }
++                    else
++                    {
++                        footer_size[pos++] = buf[i];
++                    }
++
++                    break;
++
++                case STATE_READING_IMAGE_VER:
++                    if(buf[i] == '\n')
++                    {
++                        // TODO: illegal character.  raise error
++                    }
++                    else if( '\t' == buf[i] )
++                    {
++                        parse_state = STATE_READING_IMAGE_CRC;
++                        image_ver[pos] = 0;
++                        pos = 0;
++                    }
++                    else
++                    {
++                        image_ver[pos++] = buf[i];
++                    }
++                    break;
++                case STATE_READING_IMAGE_CRC:
++                    if(buf[i] == '\t')
++                    {
++                        // illegal character.  raise error
++                        return grub_error(GRUB_ERR_BUG, 
++                            "INVALID FILE FORMAT.  TAB CHARACTER WHILE READING IMG CRC\n");
++                    }
++                    else if( '\n' == buf[i] )
++                    {
++                        //grub_printf("image file: %s\n", image_file);
++                        //grub_printf("image ver:  %s\n", image_ver);
++                        //grub_printf("image crc:  %s\n", image_crc);
++
++                        image_stats.version = grub_strtoul( (const char*)(image_ver), NULL, 16 );
++                        image_stats.crc16 = grub_strtoul( (const char*)(image_crc ), NULL, 16 );
++                        if(  footer_size[0] )
++                        {
++                            image_stats.footer_size = 
++                                grub_strtoul( (const char*)(footer_size), NULL, 10);
++                        }
++                        else
++                        {
++                            image_stats.footer_size = 0;
++                        }
++                        
++                        if( GRUB_ERR_NONE != grub_isi_validate(&image_stats, algo) )
++                        {
++                            fail_count += 1;
++                        }
++
++                        parse_state = STATE_READING_IMAGE_NAME;
++                        file_dest = path_end;
++                        image_crc[pos] = 0;
++                        pos = 0;
++                    }
++                    else
++                    {
++                        image_crc[pos++] = buf[i];
++                    }
++                    break;
++                default:
++                    grub_printf("UNEXPECTED PARSER STATE: %d\n", parse_state);
++                    return grub_error(GRUB_ERR_BUG, N_("UNEXPECTED PARSER STATE"));
++            }
++        }
++
++        // check for escape key
++        do
++        key = grub_getkey_noblock ();
++        while (key != GRUB_TERM_ESC && key != GRUB_TERM_NO_KEY);
++    }
++
++    grub_xputs ("\n");
++    grub_refresh ();
++    grub_file_close (file);
++
++    // save the env var to indicate success or failure
++    if(state[0].set)
++    {
++        grub_env_set( state[0].arg, fail_count ? "FAIL" : "PASS" );
++    }
++    else
++    {
++        grub_printf(fail_count ? "FAIL\n" : "PASS\n");
++    }
++
++    return 0;
++}
++
++static grub_extcmd_t cmd;
++static grub_extcmd_t cmd_crc16;
++
++
++GRUB_MOD_INIT(cat)
++{
++    cmd = grub_register_extcmd ("validateimgs", grub_cmd_validateimgs, 0,
++			      N_("FILE"), N_("Custom isi module to validate images."),
++			      options);
++
++ 
++    cmd = grub_register_extcmd ("crc16", grub_cmd_crc16, 0,
++			      N_("FILE"), N_("utility command to calculate crc16."),
++			      options);
++}
++
++GRUB_MOD_FINI(cat)
++{
++    grub_unregister_extcmd (cmd_crc16);
++    grub_unregister_extcmd (cmd);
++
++}
+Index: grub-core/isi/validateimgsig.c
+===================================================================
+--- grub-core/isi/validateimgsig.c	(revision 0)
++++ grub-core/isi/validateimgsig.c	(revision 194777)
+@@ -0,0 +1,512 @@
++/* validateimgsig.c - command to validate an image signature */
++/*
++ *  GRUB  --  GRand Unified Bootloader
++ *  Copyright (C) 2003,2005,2007,2008  Free Software Foundation, Inc.
++ *
++ *  GRUB is free software: you can redistribute it and/or modify
++ *  it under the terms of the GNU General Public License as published by
++ *  the Free Software Foundation, either version 3 of the License, or
++ *  (at your option) any later version.
++ *
++ *  GRUB is distributed in the hope that it will be useful,
++ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
++ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ *  GNU General Public License for more details.
++ *
++ *  You should have received a copy of the GNU General Public License
++ *  along with GRUB.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++#include <grub/types.h>
++#include <grub/misc.h>
++#include <grub/mm.h>
++#include <grub/err.h>
++#include <grub/dl.h>
++#include <grub/file.h>
++#include <grub/command.h>
++#include <grub/crypto.h>
++#include <grub/i18n.h>
++#include <grub/gcrypt/gcrypt.h>
++#include <grub/pubkey.h>
++#include <grub/env.h>
++#include <grub/kernel.h>
++#include <grub/extcmd.h>
++
++//#include <grub/disk.h>
++//#include <grub/term.h>
++//#include <grub/lib/crc.h>
++
++
++#include "isi_key.h"
++//extern unsigned char* isi_modulus;
++
++#define IMAGE_BUFFER_SIZE   4096
++#define DEFAULT_MD_NAME     "sha256"
++
++#define ISI_ENABLE_MPI_DEBUG    0
++
++GRUB_MOD_LICENSE ("GPLv3+");
++
++static const struct grub_arg_option options[] =
++{
++    {"set", 's', 0, N_("set"), N_("SET"), ARG_TYPE_STRING},
++    {"hash",'s', 0, N_("set"), N_("SET"), ARG_TYPE_STRING},
++    {"algo",'s', 0, N_("set"), N_("SET"), ARG_TYPE_STRING},
++    {0, 0, 0, 0, 0, 0}
++};
++
++static gcry_mpi_t isi_exponent_mpi = NULL;
++static gcry_mpi_t isi_modulus_mpi = NULL; 
++static gcry_mpi_t isi_public_key[2] = {NULL, NULL};
++static gcry_err_code_t isi_pubkey_load_err = GPG_ERR_BAD_SIGNATURE;
++
++// this function came from verify.c
++static gcry_error_t rsa_pad(
++    gcry_mpi_t *hmpi, 
++    grub_uint8_t *hval,
++    const gcry_md_spec_t *hash, 
++    gcry_mpi_t public_key_modulus)
++{
++    grub_size_t tlen, emlen, fflen;
++    grub_uint8_t *em, *emptr;
++    unsigned nbits = gcry_mpi_get_nbits(public_key_modulus);
++    gcry_error_t ret;
++    tlen = hash->mdlen + hash->asnlen;
++    emlen = (nbits + 7) / 8;
++    if (emlen < tlen + 11)
++    {
++        return 1;
++    }
++
++    em = grub_malloc (emlen);
++    if (!em)
++    {
++        return 1;
++    }
++
++    em[0] = 0x00;
++    em[1] = 0x01;
++    fflen = emlen - tlen - 3;
++    for (emptr = em + 2; emptr < em + 2 + fflen; emptr++)
++    {
++        *emptr = 0xff;
++    }
++
++    *emptr++ = 0x00;
++    grub_memcpy (emptr, hash->asnoid, hash->asnlen);
++    emptr += hash->asnlen;
++    grub_memcpy (emptr, hval, hash->mdlen);
++
++    ret = gcry_mpi_scan (hmpi, GCRYMPI_FMT_USG, em, emlen, 0);
++    grub_free (em);
++    return ret;
++}
++
++#if ISI_ENABLE_MPI_DEBUG 
++#define PRINT_BYTES_PER_LINE    64
++static void grub_isi_print_mpi(const char* prefix, gcry_mpi_t mpi, int style);
++void grub_isi_print_mpi(const char* prefix, gcry_mpi_t mpi, int style)
++{
++    unsigned char print_buffer[1028];
++    unsigned char* pbuf = print_buffer;
++    char tmp;
++    size_t bytes_this_line, bytes_left;
++
++    if(gcry_mpi_print(GCRYMPI_FMT_HEX,
++        print_buffer, 1028, 
++        &bytes_left, mpi) )
++    {
++        grub_printf("FAILED DTO PRINT MPI\n");
++        return;
++    }
++
++    grub_printf("%s\n", prefix);
++
++    // print 32 bytes at a time
++    while(bytes_left)
++    {
++        bytes_this_line = (bytes_left > PRINT_BYTES_PER_LINE) ? PRINT_BYTES_PER_LINE : bytes_left;
++
++        tmp = *(pbuf + bytes_this_line);
++
++
++        *(pbuf + bytes_this_line) = 0;
++
++        grub_printf("%s\n", pbuf);
++
++        // restore the value
++        *(pbuf + bytes_this_line) = tmp;
++
++        if(style && (bytes_left > bytes_this_line))
++        {
++            // just advance to the last line
++            grub_printf("...\n");
++            pbuf = (print_buffer + bytes_left - PRINT_BYTES_PER_LINE);
++            bytes_left = PRINT_BYTES_PER_LINE;
++        }
++        else
++        {
++            pbuf += bytes_this_line;
++
++            bytes_left -= bytes_this_line;
++        }
++    }
++}
++#endif
++
++
++static grub_err_t load_signature(grub_file_t sig_file, gcry_mpi_t* sig_mpi)
++{
++    unsigned char* sig_buffer = NULL;
++    grub_ssize_t bytes_read;
++    gcry_error_t gcry_result;
++
++    if(!sig_file)
++    {
++        // should never happen, the file is checked earlier
++        return grub_error(GRUB_ERR_BAD_ARGUMENT, N_("load_signature: INPUT SIGNATURE FILE IS NULL"));
++    }
++
++    sig_buffer = grub_malloc(sig_file->size);
++
++    if( ! sig_buffer )
++    {
++        grub_printf("FAILED TO ALLOC %lu bytes for signature buffer\n", 
++            sig_file->size);
++
++        return grub_error( GRUB_ERR_OUT_OF_MEMORY, N_("FAILED TO ALLOCATE MEMORY"));
++    }
++
++    bytes_read = grub_file_read(sig_file, sig_buffer, sig_file->size);
++
++    if( bytes_read != ((int)sig_file->size ))
++    {
++        grub_printf("FAILED TO READ %lu BYTES TO SIG BUFFER\n", 
++            sig_file->size);
++
++        // returning early, free the signature buffer
++        grub_free(sig_buffer);
++
++        return grub_error(GRUB_ERR_FILE_READ_ERROR, N_("FAILED TO READ BYTES FROM SIGNATURE FILE"));
++    }
++    
++    gcry_result = gcry_mpi_scan(
++        sig_mpi, 
++        GCRYMPI_FMT_USG, 
++        sig_buffer, 
++        sig_file->size, 
++        0);
++
++    grub_free(sig_buffer);
++
++    if( gcry_result )
++    {
++        grub_printf("FAILED TO SCAN SIGNATURE BUFFER INTO MPI %d\n", gcry_result);
++        return grub_error(GPG_ERR_BAD_MPI, N_("FAILED TO SCAN SIGNATURE"));
++    }
++
++    return GRUB_ERR_NONE;
++}
++
++/**
++ * @brief reads the input file and calculates the hash
++ *
++ * NOTE: CALLER IS RESPONSIBLE FOR FREEING MEMORY OF THE CONTEXT
++ */
++static grub_err_t hash_image(
++    grub_file_t img_file, 
++    const gcry_md_spec_t* hash, 
++    unsigned char** hash_value,
++    void** context
++    )
++{
++    grub_ssize_t bytes_read;
++    grub_uint8_t* img_buffer = grub_zalloc(IMAGE_BUFFER_SIZE);
++
++    if( !img_buffer )
++    {
++        return grub_error(
++            GRUB_ERR_OUT_OF_MEMORY, 
++            N_("FAILED TO ALLOCATE BUFFER FOR IMG BEING VALIDATED"));  
++    }
++
++    *context = grub_zalloc(hash->contextsize);
++
++    if(! *context )
++    {
++        grub_free(img_buffer);
++
++        return grub_error(
++            GRUB_ERR_OUT_OF_MEMORY, 
++            N_("FAILED TO ALLOCATE MESSAGE DIGEST CONTEXT"));  
++    }
++
++
++    hash->init(*context);
++
++    while(1)
++    {
++        bytes_read = grub_file_read(img_file, img_buffer, IMAGE_BUFFER_SIZE);   
++        if( bytes_read < 0 )
++        {
++            grub_free(img_buffer);
++            return grub_error(GRUB_ERR_FILE_READ_ERROR, N_("ERROR READING IMG FILE"));
++        }
++        else if(0 == bytes_read)
++        {
++            break;
++        }
++        else
++        {
++            hash->write(*context, img_buffer, bytes_read);
++        }
++    }
++
++    hash->final(*context);
++
++    *hash_value = hash->read(*context);
++
++    grub_free(img_buffer);
++
++    return GRUB_ERR_NONE;
++}
++
++// TODO: PULL THIS INTO A HEADER FILE SOMEWHERE ELSE
++grub_err_t grub_validateimgsig(
++    const char* img_file_name, 
++    const char* sig_file_name, 
++    const char* hash_name, int* img_valid);
++
++grub_err_t grub_validateimgsig(
++    const char* img_file_name, 
++    const char* sig_file_name, 
++    const char* hash_name, 
++    int* img_valid)
++{
++    grub_err_t ret = GRUB_ERR_NONE;
++    const gcry_md_spec_t* hash;
++    void* hash_context = NULL;
++    unsigned char* hash_value = NULL;
++    
++    // gcry_mpi_t is a pointer to struct gcry_mpi
++    gcry_mpi_t sig_mpi;  
++    gcry_mpi_t hash_mpi;  
++    gcry_error_t gcry_result;
++
++    grub_file_t img_file = grub_file_open (img_file_name);
++    grub_file_t sig_file = grub_file_open (sig_file_name);
++
++    // initialize to NOT valid
++    *img_valid = 0;
++
++    // this can be modified later to point to another pk algo
++    gcry_pk_spec_t* pkalgo = grub_crypto_pk_rsa;
++
++    if (! img_file)
++    {
++        grub_printf("validateimgsig: FAILED TO OPEN FILE %s\n", img_file_name);
++        return grub_error(GRUB_ERR_FILE_READ_ERROR, N_("FAILED TO OPEN IMAGE FILE"));
++    }
++
++    else if( ! sig_file )
++    {
++        grub_printf("validateimgsig: FAILED TO OPEN FILE %s\n", sig_file_name);
++        grub_file_close(img_file);
++        return grub_error(GRUB_ERR_FILE_READ_ERROR, N_("FAILED TO OPEN SIGNATURE FILE"));
++    }
++
++    if(!pkalgo)
++    {
++        grub_printf("pkalgo NOT loaded\n");
++        ret =  grub_error(GPG_ERR_NO_ENCRYPTION_SCHEME, N_("FAILED TO LOAD PUBLIC KEY ALGO"));
++        goto cleanup;
++    }
++
++    hash = grub_crypto_lookup_md_by_name (hash_name);
++
++    if(!hash)
++    {
++        grub_printf("FAILED TO LOAD HASH/DIGEST ALGO %s\n", hash_name);
++        ret = GPG_ERR_DIGEST_ALGO;
++        goto cleanup;
++    }
++    // got hash algorithm
++
++    ret = hash_image(img_file, hash, &hash_value, &hash_context);
++
++    if(ret)
++    {
++        grub_printf("FAILED TO HASH IMAGE\n");
++
++        goto cleanup;
++    }
++    
++    // load the hash value into an mpi
++    gcry_result = gcry_mpi_scan(
++        &hash_mpi,
++        GCRYMPI_FMT_USG, 
++        hash_value, 
++        hash->mdlen,
++        0);
++
++    if(gcry_result)
++    {
++        grub_printf("FAILED TO SCAN HASH BUFFER INTO MPI\n");
++        ret = grub_error(GPG_ERR_BAD_MPI, N_("FAILED TO SCAN HASH INTO MPI"));
++        goto cleanup;
++    }
++
++
++    ret = load_signature(sig_file, &sig_mpi);
++    if(ret)
++    {
++        goto cleanup;
++    }
++
++    gcry_result = rsa_pad(&hash_mpi, hash_value, hash, isi_modulus_mpi);
++    if(gcry_result)
++    {
++        grub_printf("RSA PAD FAILED: %d\n", gcry_result);
++
++        ret = grub_error(GPG_ERR_GENERAL, N_("FAILED TO PAD RSA HASH VALUE"));
++
++        goto cleanup;
++    }
++
++    gcry_result = pkalgo->verify(0, hash_mpi, &sig_mpi, isi_public_key, 0, 0);
++
++    *img_valid = (GPG_ERR_NO_ERROR == gcry_result);
++
++cleanup:
++    if(hash_context)
++    {
++        grub_free(hash_context);
++    }
++
++    if(img_file)
++    {
++        grub_file_close (img_file);
++    }
++    if(sig_file)
++    {
++        grub_file_close(sig_file);
++    }
++
++    return ret;
++}
++
++
++static grub_err_t
++grub_cmd_validateimgsig(grub_extcmd_context_t ctxt, int argc, char **args)
++{
++    grub_err_t ret = GRUB_ERR_NONE;
++    struct grub_arg_list *state = ctxt->state;
++    int img_valid = 0;
++    const char* hash_name;
++    const char* sig_file_name;
++    int img_file_name_length;
++    char buffer[0x100];
++
++    if( isi_pubkey_load_err )
++    {
++        return grub_error(GPG_ERR_GENERAL, N_("FAILED TO LOAD PUBLIC KEY"));
++    }
++
++    if (argc < 1)
++    {
++        return grub_error (GRUB_ERR_BAD_ARGUMENT, N_("filename expected"));
++    }
++
++    if(argc < 2)
++    {
++        // Need to manually set the signature filename
++        img_file_name_length = grub_strlen(args[0]);
++        grub_memcpy(buffer, args[0], img_file_name_length);
++        buffer[img_file_name_length] = '.';
++        buffer[img_file_name_length + 1] = 's';
++        buffer[img_file_name_length + 2] = 'i';
++        buffer[img_file_name_length + 3] = 'g';
++        buffer[img_file_name_length + 4] = 0;
++        sig_file_name = buffer;
++    }
++    else
++    {
++        // second arg is the signature file name
++        sig_file_name = args[1];
++    }
++
++    if( GRUB_ERR_NONE != ret )
++    {
++        img_valid = 0;
++    }
++
++    if(state[1].set)
++    {
++        //grub_printf("user has supplied hash arg: %s\n", state[1].arg);
++        hash_name = state[1].arg;
++    }
++    else
++    {
++        //grub_printf("user has NOT supplied hash, defaulting to sha256\n");
++        hash_name = DEFAULT_MD_NAME;     
++    }
++
++    ret = grub_validateimgsig(args[0], sig_file_name, hash_name, &img_valid);
++
++    // save the env var to indicate success or failure
++    if(state[0].set)
++    {
++        grub_env_set( state[0].arg, img_valid ? "PASS" : "FAIL" );
++    }
++    else
++    {
++        grub_printf(img_valid ? "PASS\n" : "FAIL\n");
++    }
++
++    return ret;
++}
++
++static grub_extcmd_t cmd;
++
++GRUB_MOD_INIT(cat)
++{
++    cmd = grub_register_extcmd ("validateimgsig", grub_cmd_validateimgsig, 0,
++			      N_("FILE"), N_("Custom isi module to validate image signature."),
++			      options);
++
++    // TODO: FIGURE OUT HOW TO RAISE A MODULE LOAD ERROR IF I FAIL TO 
++    // LOAD THE ISI PUBLIC KEY MODULUS/EXPONENT
++    isi_pubkey_load_err = gcry_mpi_scan(
++        &isi_exponent_mpi,
++        GCRYMPI_FMT_USG, 
++        isi_exponent, 
++        ISI_EXPONENT_LENGTH,
++        0);
++
++    if(!isi_pubkey_load_err)
++    {
++        isi_pubkey_load_err = gcry_mpi_scan(
++            &isi_modulus_mpi,
++            GCRYMPI_FMT_USG, 
++            isi_modulus, 
++            ISI_MODULUS_LENGTH,
++            0);
++    }
++
++    // the verify method expects an an array of gcry_mpi_t.  
++    // The first element is the modulus and 
++    // the second should be the public exponent
++    if(!isi_pubkey_load_err)
++    {
++        isi_public_key[0] = isi_modulus_mpi;
++        isi_public_key[1] = isi_exponent_mpi;
++    }
++}
++
++GRUB_MOD_FINI(cat)
++{
++    gcry_mpi_release(isi_exponent_mpi);
++    gcry_mpi_release(isi_modulus_mpi);
++
++    grub_unregister_extcmd (cmd);
++}
+Index: grub-core/isi/isi_key.c
+===================================================================
+--- grub-core/isi/isi_key.c	(revision 0)
++++ grub-core/isi/isi_key.c	(revision 194777)
+@@ -0,0 +1,44 @@
++
++unsigned char isi_modulus[] = 
++{
++
++0xf3,0x78,0x95,0xe5,0x6a,0x96,0x93,0x77,0x93,0xbc,0xe2,0xbc,0xd1,0x6e,
++0x53,0x54,0x0a,0xb4,0x78,0xe8,0xd0,0x23,0x7b,0x01,0xf6,0xa6,0x22,0x2c,0x66,
++0x41,0x78,0xe4,0x56,0xe0,0x90,0x3f,0xab,0x53,0xd9,0x6f,0x2b,0x77,0x9a,0xe7,
++0x34,0x31,0xc1,0x66,0x9c,0x26,0x2a,0x5d,0xaf,0x61,0x37,0x09,0x70,0xe7,0x99,
++0xb4,0xc8,0xa0,0xd0,0x02,0x29,0xc4,0xca,0xe2,0x60,0xb5,0x21,0x44,0x6c,0x5e,
++0x8d,0xb1,0x71,0x22,0xbb,0x5b,0x9e,0x4f,0x9b,0x48,0x0e,0xe2,0xef,0x91,0x9d,
++0x89,0x69,0x11,0xb0,0x48,0xa6,0x6a,0xfc,0x34,0x8c,0x77,0x45,0x6b,0x60,0x8e,
++0x48,0x82,0xf6,0x43,0x62,0xa1,0xc2,0xbe,0x54,0x17,0x98,0x49,0x4b,0x05,0x50,
++0xc6,0xb5,0x66,0xac,0x74,0xdb,0xf7,0x47,0x33,0xb1,0xaa,0x83,0x3f,0xe1,0x6b,
++0x48,0x35,0x84,0xbc,0x3c,0xa3,0x3e,0xd4,0x8d,0xc2,0x2e,0xd1,0xa5,0x4e,0x8a,
++0x03,0x35,0x1c,0x7e,0x43,0xc0,0x53,0x64,0x3e,0xfa,0xdc,0xb0,0x8f,0x65,0x4e,
++0x4a,0x2a,0x71,0xe3,0x46,0x5b,0xa3,0x69,0x3d,0x13,0x3c,0xdd,0xc4,0x38,0x0e,
++0xa6,0x98,0x40,0x42,0x29,0x53,0x42,0xba,0x6e,0xfe,0xc6,0xb6,0x46,0x3b,0x12,
++0xae,0xc1,0x8b,0x27,0x34,0x2e,0x52,0x56,0xd6,0x36,0x7b,0xa5,0x12,0xcd,0xbe,
++0x61,0xec,0x1f,0x25,0xd7,0x4a,0xbd,0x7d,0x28,0xe1,0xe1,0x2f,0x3a,0x2b,0xb5,
++0xa7,0x8b,0xdb,0x02,0xcc,0xd2,0xd0,0xcf,0xb9,0x5a,0xdb,0x06,0x92,0xd8,0xa2,
++0xb6,0x12,0xff,0x1a,0x4a,0x68,0x35,0x1a,0x8a,0x7a,0x4f,0xbd,0x2e,0xe6,0x0a,
++0x53,0x1b,0x00,0x8e,0x67,0x42,0x76,0x46,0x1c,0x1b,0x8b,0xd7,0xb0,0xe8,0x97,
++0x21,0xa1,0x71,0x1c,0xe2,0x40,0xb6,0xbe,0xaa,0x3d,0xb6,0xbc,0xbf,0x36,0x96,
++0x12,0xc0,0x02,0xbb,0x30,0xb7,0x7f,0xba,0x53,0xf5,0xd5,0xc4,0x2e,0xec,0xf3,
++0xf5,0x0d,0xb2,0xd2,0xce,0x83,0x91,0xef,0x8f,0xe7,0x2e,0xaa,0xe4,0x48,0x42,
++0xfa,0xa2,0xce,0xca,0x73,0x7e,0x83,0x31,0x07,0x8f,0xe7,0x30,0xa8,0x28,0xfa,
++0x1e,0x86,0xd8,0x2d,0xa4,0x90,0x34,0xdd,0x71,0x30,0x0e,0x3b,0x97,0x21,0xa1,
++0xcf,0x99,0xdf,0x28,0x55,0x43,0xa0,0x4f,0x8f,0xae,0x0e,0xdc,0x4a,0x1f,0xf9,
++0xc4,0xab,0x21,0x5c,0xc4,0xf1,0xb4,0xbd,0x65,0x5d,0xaf,0xf0,0x26,0xb2,0x48,
++0x02,0x40,0x6f,0x96,0xc9,0x97,0xd1,0xf5,0x8e,0x48,0xaa,0xf9,0x78,0xf4,0x2a,
++0x71,0xbc,0x35,0x31,0x4a,0xfb,0xa2,0x9f,0x0d,0xe8,0x4b,0xe3,0x1a,0x50,0xe9,
++0x35,0x8d,0x91,0xd6,0x56,0x16,0x62,0x0e,0x0a,0x7f,0x86,0x04,0xeb,0x66,0x3a,
++0x0e,0x41,0xad,0x2b,0x89,0x72,0x4b,0x97,0x22,0x22,0xef,0xbb,0xe4,0xde,0x3e,
++0xac,0x1d,0x10,0x9f,0x68,0xeb,0x4a,0x4b,0x39,0x7c,0x62,0xa3,0x19,0x44,0x40,
++0xe5,0xf1,0xd6,0xd0,0xbd,0x9a,0xb1,0xb9,0xe1,0xc7,0x46,0x0b,0xc1,0x4b,0x91,
++0xc6,0x92,0x04,0xf7,0xd1,0x57,0xa0,0xe2,0xb2,0xf6,0xe8,0x9f,0x5a,0xd7,0x0e,
++0xea,0x68,0x9e,0x09,0x37,0x52,0x01,0xd7,0xed,0xd0,0x61,0xe6,0x85,0xe5,0x80,
++0x62,0x9b,0xc5,0xd7,0xaa,0x24,0x42,0x41,0x70,0x62,0x69,0xe4,0x26,0x03,0xb4,
++0xa8,0x2a,0xff
++
++};
++
++// stored MSB first
++unsigned char isi_exponent[] = { 0x00, 0x01, 0x00, 0x01 };
 Index: grub-core/loader/i386/linux.c
 ===================================================================
 --- grub-core/loader/i386/linux.c	(revision 161361)
