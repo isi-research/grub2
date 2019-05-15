@@ -1,0 +1,486 @@
+diff --git a/grub-core/Makefile.core.def b/grub-core/Makefile.core.def
+index 58b4208b0..ec280343c 100644
+--- a/grub-core/Makefile.core.def
++++ b/grub-core/Makefile.core.def
+@@ -2352,3 +2352,9 @@ module = {
+   common = loader/i386/xen_file64.c;
+   extra_dist = loader/i386/xen_fileXX.c;
+ };
++
++module = {
++  name = isimath;
++  common = isi/isimath.c;
++};
++
+diff --git a/grub-core/isi/isimath.c b/grub-core/isi/isimath.c
+index 6c163b36c..5a078817a 100644
+--- a/grub-core/isi/isimath.c
++++ b/grub-core/isi/isimath.c
+@@ -18,6 +18,13 @@
+  *  along with GRUB.  If not, see <http://www.gnu.org/licenses/>.
+  */
+ 
++/*
++ * Copyright 2017-2019, Intuitive Surgical Operations, Inc. All rights reserved.
++ *
++ * This source code is licensed under the GPLv3 license found in
++ * the COPYING file in the root directory of this source tree.
++ */
++
+ #include <grub/types.h>
+ #include <grub/misc.h>
+ #include <grub/mm.h>
+diff --git a/grub-core/kern/dl.c b/grub-core/kern/dl.c
+index e394cd96f..e74b43c86 100644
+--- a/grub-core/kern/dl.c
++++ b/grub-core/kern/dl.c
+@@ -17,6 +17,13 @@
+  *  along with GRUB.  If not, see <http://www.gnu.org/licenses/>.
+  */
+ 
++/*
++ *  Copyright 2017-2019, Intuitive Surgical Operations, Inc. All rights reserved.
++ *
++ *  This source code is licensed under the GPLv3 license found in
++ *  the COPYING file in the root directory of this source tree.
++ */
++
+ /* Force native word size */
+ #define GRUB_TARGET_WORDSIZE (8 * GRUB_CPU_SIZEOF_VOID_P)
+ 
+@@ -38,6 +45,10 @@
+ #define GRUB_MODULES_MACHINE_READONLY
+ #endif
+ 
++#ifdef GRUB_MACHINE_EFI
++#include <grub/efi/efi.h>
++#endif
++
+ 
+ 
+ #pragma GCC diagnostic ignored "-Wcast-align"
+@@ -686,6 +697,15 @@ grub_dl_load_file (const char *filename)
+   void *core = 0;
+   grub_dl_t mod = 0;
+ 
++#ifdef GRUB_MACHINE_EFI
++  if (grub_efi_secure_boot ())
++    {
++      grub_error (GRUB_ERR_ACCESS_DENIED,
++		  "Secure Boot forbids loading module from %s", filename);
++      return 0;
++    }
++#endif
++
+   grub_boot_time ("Loading module %s", filename);
+ 
+   file = grub_file_open (filename);
+diff --git a/grub-core/kern/efi/efi.c b/grub-core/kern/efi/efi.c
+index caf9bcc41..a91fed8d4 100644
+--- a/grub-core/kern/efi/efi.c
++++ b/grub-core/kern/efi/efi.c
+@@ -17,6 +17,13 @@
+  *  along with GRUB.  If not, see <http://www.gnu.org/licenses/>.
+  */
+ 
++/*
++ *  Copyright 2017-2019, Intuitive Surgical Operations, Inc. All rights reserved.
++ *
++ *  This source code is licensed under the GPLv3 license found in
++ *  the COPYING file in the root directory of this source tree.
++ */
++
+ #include <grub/misc.h>
+ #include <grub/charset.h>
+ #include <grub/efi/api.h>
+@@ -264,6 +271,34 @@ grub_efi_get_variable (const char *var, const grub_efi_guid_t *guid,
+   return NULL;
+ }
+ 
++grub_efi_boolean_t
++grub_efi_secure_boot (void)
++{
++  grub_efi_guid_t efi_var_guid = GRUB_EFI_GLOBAL_VARIABLE_GUID;
++  grub_size_t datasize;
++  char *secure_boot = NULL;
++  char *setup_mode = NULL;
++  grub_efi_boolean_t ret = 0;
++
++  secure_boot = grub_efi_get_variable ("SecureBoot", &efi_var_guid, &datasize);
++
++  if (datasize != 1 || !secure_boot)
++    goto out;
++
++  setup_mode = grub_efi_get_variable ("SetupMode", &efi_var_guid, &datasize);
++
++  if (datasize != 1 || !setup_mode)
++    goto out;
++
++  if (*secure_boot && !*setup_mode)
++    ret = 1;
++
++ out:
++  grub_free (secure_boot);
++  grub_free (setup_mode);
++  return ret;
++}
++
+ #pragma GCC diagnostic ignored "-Wcast-align"
+ 
+ /* Search the mods section from the PE32/PE32+ image. This code uses
+diff --git a/grub-core/lib/crc.c b/grub-core/lib/crc.c
+index bf97cc63a..218c6a22d 100644
+--- a/grub-core/lib/crc.c
++++ b/grub-core/lib/crc.c
+@@ -17,11 +17,88 @@
+  *  along with GRUB.  If not, see <http://www.gnu.org/licenses/>.
+  */
+ 
++/*
++ *  Copyright 2017-2019, Intuitive Surgical Operations, Inc. All rights reserved.
++ *
++ *  This source code is licensed under the GPLv3 license found in
++ *  the COPYING file in the root directory of this source tree.
++ */
++
+ #include <grub/types.h>
+ #include <grub/lib/crc.h>
+ 
+ static grub_uint32_t crc32c_table [256];
+ 
++static const grub_uint8_t crc16_table_low[] = {
++
++    0x00, 0xc1, 0x81, 0x40, 0x01, 0xc0, 0x80, 0x41, 
++    0x01, 0xc0, 0x80, 0x41, 0x00, 0xc1, 0x81, 0x40,
++    0x01, 0xc0, 0x80, 0x41, 0x00, 0xc1, 0x81, 0x40, 
++    0x00, 0xc1, 0x81, 0x40, 0x01, 0xc0, 0x80, 0x41,
++    0x01, 0xc0, 0x80, 0x41, 0x00, 0xc1, 0x81, 0x40, 
++    0x00, 0xc1, 0x81, 0x40, 0x01, 0xc0, 0x80, 0x41,
++    0x00, 0xc1, 0x81, 0x40, 0x01, 0xc0, 0x80, 0x41, 
++    0x01, 0xc0, 0x80, 0x41, 0x00, 0xc1, 0x81, 0x40,
++    0x01, 0xc0, 0x80, 0x41, 0x00, 0xc1, 0x81, 0x40, 
++    0x00, 0xc1, 0x81, 0x40, 0x01, 0xc0, 0x80, 0x41,
++    0x00, 0xc1, 0x81, 0x40, 0x01, 0xc0, 0x80, 0x41, 
++    0x01, 0xc0, 0x80, 0x41, 0x00, 0xc1, 0x81, 0x40,
++    0x00, 0xc1, 0x81, 0x40, 0x01, 0xc0, 0x80, 0x41, 
++    0x01, 0xc0, 0x80, 0x41, 0x00, 0xc1, 0x81, 0x40,
++    0x01, 0xc0, 0x80, 0x41, 0x00, 0xc1, 0x81, 0x40, 
++    0x00, 0xc1, 0x81, 0x40, 0x01, 0xc0, 0x80, 0x41,
++    0x01, 0xc0, 0x80, 0x41, 0x00, 0xc1, 0x81, 0x40, 
++    0x00, 0xc1, 0x81, 0x40, 0x01, 0xc0, 0x80, 0x41,
++    0x00, 0xc1, 0x81, 0x40, 0x01, 0xc0, 0x80, 0x41, 
++    0x01, 0xc0, 0x80, 0x41, 0x00, 0xc1, 0x81, 0x40,
++    0x00, 0xc1, 0x81, 0x40, 0x01, 0xc0, 0x80, 0x41, 
++    0x01, 0xc0, 0x80, 0x41, 0x00, 0xc1, 0x81, 0x40,
++    0x01, 0xc0, 0x80, 0x41, 0x00, 0xc1, 0x81, 0x40, 
++    0x00, 0xc1, 0x81, 0x40, 0x01, 0xc0, 0x80, 0x41,
++    0x00, 0xc1, 0x81, 0x40, 0x01, 0xc0, 0x80, 0x41, 
++    0x01, 0xc0, 0x80, 0x41, 0x00, 0xc1, 0x81, 0x40,
++    0x01, 0xc0, 0x80, 0x41, 0x00, 0xc1, 0x81, 0x40, 
++    0x00, 0xc1, 0x81, 0x40, 0x01, 0xc0, 0x80, 0x41,
++    0x01, 0xc0, 0x80, 0x41, 0x00, 0xc1, 0x81, 0x40, 
++    0x00, 0xc1, 0x81, 0x40, 0x01, 0xc0, 0x80, 0x41,
++    0x00, 0xc1, 0x81, 0x40, 0x01, 0xc0, 0x80, 0x41, 
++    0x01, 0xc0, 0x80, 0x41, 0x00, 0xc1, 0x81, 0x40 };
++
++static const grub_uint8_t crc16_table_high[] = {
++
++    0x00, 0xc0, 0xc1, 0x01, 0xc3, 0x03, 0x02, 0xc2, 
++    0xc6, 0x06, 0x07, 0xc7, 0x05, 0xc5, 0xc4, 0x04,
++    0xcc, 0x0c, 0x0d, 0xcd, 0x0f, 0xcf, 0xce, 0x0e, 
++    0x0a, 0xca, 0xcb, 0x0b, 0xc9, 0x09, 0x08, 0xc8,
++    0xd8, 0x18, 0x19, 0xd9, 0x1b, 0xdb, 0xda, 0x1a, 
++    0x1e, 0xde, 0xdf, 0x1f, 0xdd, 0x1d, 0x1c, 0xdc,
++    0x14, 0xd4, 0xd5, 0x15, 0xd7, 0x17, 0x16, 0xd6, 
++    0xd2, 0x12, 0x13, 0xd3, 0x11, 0xd1, 0xd0, 0x10,
++    0xf0, 0x30, 0x31, 0xf1, 0x33, 0xf3, 0xf2, 0x32, 
++    0x36, 0xf6, 0xf7, 0x37, 0xf5, 0x35, 0x34, 0xf4,
++    0x3c, 0xfc, 0xfd, 0x3d, 0xff, 0x3f, 0x3e, 0xfe, 
++    0xfa, 0x3a, 0x3b, 0xfb, 0x39, 0xf9, 0xf8, 0x38,
++    0x28, 0xe8, 0xe9, 0x29, 0xeb, 0x2b, 0x2a, 0xea, 
++    0xee, 0x2e, 0x2f, 0xef, 0x2d, 0xed, 0xec, 0x2c,
++    0xe4, 0x24, 0x25, 0xe5, 0x27, 0xe7, 0xe6, 0x26, 
++    0x22, 0xe2, 0xe3, 0x23, 0xe1, 0x21, 0x20, 0xe0,
++    0xa0, 0x60, 0x61, 0xa1, 0x63, 0xa3, 0xa2, 0x62, 
++    0x66, 0xa6, 0xa7, 0x67, 0xa5, 0x65, 0x64, 0xa4,
++    0x6c, 0xac, 0xad, 0x6d, 0xaf, 0x6f, 0x6e, 0xae, 
++    0xaa, 0x6a, 0x6b, 0xab, 0x69, 0xa9, 0xa8, 0x68,
++    0x78, 0xb8, 0xb9, 0x79, 0xbb, 0x7b, 0x7a, 0xba, 
++    0xbe, 0x7e, 0x7f, 0xbf, 0x7d, 0xbd, 0xbc, 0x7c,
++    0xb4, 0x74, 0x75, 0xb5, 0x77, 0xb7, 0xb6, 0x76, 
++    0x72, 0xb2, 0xb3, 0x73, 0xb1, 0x71, 0x70, 0xb0,
++    0x50, 0x90, 0x91, 0x51, 0x93, 0x53, 0x52, 0x92, 
++    0x96, 0x56, 0x57, 0x97, 0x55, 0x95, 0x94, 0x54,
++    0x9c, 0x5c, 0x5d, 0x9d, 0x5f, 0x9f, 0x9e, 0x5e, 
++    0x5a, 0x9a, 0x9b, 0x5b, 0x99, 0x59, 0x58, 0x98,
++    0x88, 0x48, 0x49, 0x89, 0x4b, 0x8b, 0x8a, 0x4a, 
++    0x4e, 0x8e, 0x8f, 0x4f, 0x8d, 0x4d, 0x4c, 0x8c,
++    0x44, 0x84, 0x85, 0x45, 0x87, 0x47, 0x46, 0x86, 
++    0x82, 0x42, 0x43, 0x83, 0x41, 0x81, 0x80, 0x40 };
++
+ /* Helper for init_crc32c_table.  */
+ static grub_uint32_t
+ reflect (grub_uint32_t ref, int len)
+@@ -74,3 +151,28 @@ grub_getcrc32c (grub_uint32_t crc, const void *buf, int size)
+ 
+   return crc ^ 0xffffffff;
+ }
++
++grub_uint16_t 
++grub_getcrc16  (grub_uint16_t crc, const void *buf, int size)
++{
++    int i;
++    grub_uint16_t temp;
++    const grub_uint8_t *data = buf;
++
++    for (i = 0; i < size; i++)
++    {
++        temp = (crc & 0xff) ^ (grub_uint16_t)(*data);
++
++        crc = (crc16_table_low[temp] ^ (crc >> 8)) +
++                     (crc16_table_high[temp] << 8);
++
++        data++;
++    }
++
++    return crc;
++}
++
++
++
++
++
+diff --git a/grub-core/loader/i386/linux.c b/grub-core/loader/i386/linux.c
+index fddcc461d..2ce01ae07 100644
+--- a/grub-core/loader/i386/linux.c
++++ b/grub-core/loader/i386/linux.c
+@@ -16,6 +16,13 @@
+  *  along with GRUB.  If not, see <http://www.gnu.org/licenses/>.
+  */
+ 
++/*
++ *  Copyright 2017-2019, Intuitive Surgical Operations, Inc. All rights reserved.
++ *
++ *  This source code is licensed under the GPLv3 license found in
++ *  the COPYING file in the root directory of this source tree.
++ */
++
+ #include <grub/loader.h>
+ #include <grub/memory.h>
+ #include <grub/normal.h>
+@@ -687,6 +694,8 @@ grub_cmd_linux (grub_command_t cmd __attribute__ ((unused)),
+   int relocatable;
+   grub_uint64_t preferred_address = GRUB_LINUX_BZIMAGE_ADDR;
+ 
++  grub_puts("grub_cmd_linux: loader/i386/linux.c"); 
++
+   grub_dl_ref (my_mod);
+ 
+   if (argc == 0)
+@@ -847,8 +856,10 @@ grub_cmd_linux (grub_command_t cmd __attribute__ ((unused)),
+       ((grub_addr_t) grub_efi_system_table >> 32) != 0)
+     return grub_error(GRUB_ERR_BAD_OS,
+ 		      "kernel does not support 64-bit addressing");
++  grub_puts("GRUB_MACHINE_EFI and __x86_64__ are both defined");
+ #endif
+-
++  
++  grub_printf("grub_cmd_linux: linux_params.version = %d\n", grub_le_to_cpu16 (linux_params.version));
+   if (grub_le_to_cpu16 (linux_params.version) >= 0x0208)
+     {
+       linux_params.v0208.efi_signature = GRUB_LINUX_EFI_SIGNATURE;
+diff --git a/grub-core/loader/i386/pc/linux.c b/grub-core/loader/i386/pc/linux.c
+index a293b17aa..8deeeca58 100644
+--- a/grub-core/loader/i386/pc/linux.c
++++ b/grub-core/loader/i386/pc/linux.c
+@@ -17,6 +17,13 @@
+  *  along with GRUB.  If not, see <http://www.gnu.org/licenses/>.
+  */
+ 
++/*
++ *  Copyright 2017-2019, Intuitive Surgical Operations, Inc. All rights reserved.
++ *
++ *  This source code is licensed under the GPLv3 license found in
++ *  the COPYING file in the root directory of this source tree.
++ */
++
+ #include <grub/loader.h>
+ #include <grub/file.h>
+ #include <grub/err.h>
+@@ -131,6 +138,8 @@ grub_cmd_linux (grub_command_t cmd __attribute__ ((unused)),
+   grub_addr_t grub_linux_prot_target;
+   grub_err_t err;
+ 
++  grub_puts(  "grub_cmd_linux: loader/i386/pc/linux.c");
++
+   grub_dl_ref (my_mod);
+ 
+   if (argc == 0)
+diff --git a/grub-core/loader/ia64/efi/linux.c b/grub-core/loader/ia64/efi/linux.c
+index efaa42ccd..9ba443621 100644
+--- a/grub-core/loader/ia64/efi/linux.c
++++ b/grub-core/loader/ia64/efi/linux.c
+@@ -16,6 +16,13 @@
+  *  along with GRUB.  If not, see <http://www.gnu.org/licenses/>.
+  */
+ 
++/*
++ *  Copyright 2017-2019, Intuitive Surgical Operations, Inc. All rights reserved.
++ *
++ *  This source code is licensed under the GPLv3 license found in
++ *  the COPYING file in the root directory of this source tree.
++ */
++
+ #include <grub/loader.h>
+ #include <grub/file.h>
+ #include <grub/disk.h>
+@@ -491,6 +498,8 @@ grub_cmd_linux (grub_command_t cmd __attribute__ ((unused)),
+   grub_ssize_t len;
+   int i;
+ 
++  grub_puts("grub_cmd_linux: loader/ia64/efi/linux.c");
++
+   grub_dl_ref (my_mod);
+ 
+   grub_loader_unset ();
+diff --git a/grub-core/loader/linux.c b/grub-core/loader/linux.c
+index be6fa0f4d..8586fe305 100644
+--- a/grub-core/loader/linux.c
++++ b/grub-core/loader/linux.c
+@@ -1,3 +1,9 @@
++/*
++ *  Copyright 2017-2019, Intuitive Surgical Operations, Inc. All rights reserved.
++ *
++ *  This source code is licensed under the GPLv3 license found in
++ *  the COPYING file in the root directory of this source tree.
++ */
+ #include <grub/types.h>
+ #include <grub/err.h>
+ #include <grub/linux.h>
+@@ -244,6 +250,65 @@ grub_initrd_close (struct grub_linux_initrd_context *initrd_ctx)
+   initrd_ctx->components = 0;
+ }
+ 
++typedef struct {
++    grub_off_t size;
++    grub_off_t bytes_read;
++    int last_progress;
++} progress_data_t;
++static progress_data_t initrd_progress_data;
++
++static void init_progress_data(progress_data_t* progress_data, grub_off_t size)
++{
++    if(progress_data)
++    {
++        progress_data->size = size;
++        progress_data->bytes_read = 0;
++        // this is so that progress 0 will show up once.
++        progress_data->last_progress = -1;
++    }
++}
++
++#define PROGRESS_TICK       5
++#define NEWLINE_TICK        50
++
++static void initrd_read_hook(grub_disk_addr_t sector,
++				       unsigned offset, unsigned length,
++				       void *data)
++{
++    progress_data_t* progress_data; 
++    int progress ;
++
++    // sanitize the data
++    if(!data)
++    {
++        return;
++    }
++
++    progress_data = (progress_data_t*)(data);
++
++    // just to satisy the grub compiler, which I assume has some 
++    // sort of static analyzer
++    sector = sector;
++    offset = offset;
++
++    progress_data->bytes_read += length;
++
++    progress = (int)((100 * progress_data->bytes_read)/(progress_data->size));
++
++    // this should be safe.  grub_off_t is a uint64
++    if((0 == (progress % PROGRESS_TICK)) && (progress != progress_data->last_progress))
++    {
++        progress_data->last_progress = progress;
++
++        grub_printf(".%02d", progress);
++
++        if( progress && (0 == (progress % NEWLINE_TICK)))
++        {
++            grub_printf("\n");
++        }
++    }
++}
++
+ grub_err_t
+ grub_initrd_load (struct grub_linux_initrd_context *initrd_ctx,
+ 		  char *argv[], void *target)
+@@ -279,6 +344,12 @@ grub_initrd_load (struct grub_linux_initrd_context *initrd_ctx,
+ 	}
+ 
+       cursize = initrd_ctx->components[i].size;
++
++      init_progress_data(&initrd_progress_data, cursize);
++      initrd_ctx->components[i].file->read_hook = initrd_read_hook;
++
++      initrd_ctx->components[i].file->read_hook_data = (void*)(&initrd_progress_data);
++
+       if (grub_file_read (initrd_ctx->components[i].file, ptr, cursize)
+ 	  != cursize)
+ 	{
+diff --git a/include/grub/efi/efi.h b/include/grub/efi/efi.h
+index 0e6fd86b0..83f6c2d0a 100644
+--- a/include/grub/efi/efi.h
++++ b/include/grub/efi/efi.h
+@@ -17,6 +17,13 @@
+  *  along with GRUB.  If not, see <http://www.gnu.org/licenses/>.
+  */
+ 
++/*
++ *  Copyright 2017-2019, Intuitive Surgical Operations, Inc. All rights reserved.
++ *
++ *  This source code is licensed under the GPLv3 license found in
++ *  the COPYING file in the root directory of this source tree.
++ */
++
+ #ifndef GRUB_EFI_EFI_HEADER
+ #define GRUB_EFI_EFI_HEADER	1
+ 
+@@ -73,6 +80,7 @@ EXPORT_FUNC (grub_efi_set_variable) (const char *var,
+ 				     const grub_efi_guid_t *guid,
+ 				     void *data,
+ 				     grub_size_t datasize);
++grub_efi_boolean_t EXPORT_FUNC (grub_efi_secure_boot) (void);
+ int
+ EXPORT_FUNC (grub_efi_compare_device_paths) (const grub_efi_device_path_t *dp1,
+ 					     const grub_efi_device_path_t *dp2);
+diff --git a/include/grub/lib/crc.h b/include/grub/lib/crc.h
+index c5098a8c3..7381c6a16 100644
+--- a/include/grub/lib/crc.h
++++ b/include/grub/lib/crc.h
+@@ -17,9 +17,17 @@
+  *  along with GRUB.  If not, see <http://www.gnu.org/licenses/>.
+  */
+ 
++/*
++ *  Copyright 2017-2019, Intuitive Surgical Operations, Inc. All rights reserved.
++ *
++ *  This source code is licensed under the GPLv3 license found in
++ *  the COPYING file in the root directory of this source tree.
++ */
++
+ #ifndef GRUB_CRC_H
+ #define GRUB_CRC_H	1
+ 
+ grub_uint32_t grub_getcrc32c (grub_uint32_t crc, const void *buf, int size);
++grub_uint16_t grub_getcrc16 (grub_uint16_t crc, const void *buf, int size);
+ 
+ #endif /* ! GRUB_CRC_H */
