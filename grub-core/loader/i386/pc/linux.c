@@ -1,3 +1,4 @@
+// Modified by Intuitive Surgical Operations, Inc., April 2016
 /* linux.c - boot Linux zImage or bzImage */
 /*
  *  GRUB  --  GRand Unified Bootloader
@@ -130,6 +131,8 @@ grub_cmd_linux (grub_command_t cmd __attribute__ ((unused)),
   int grub_linux_is_bzimage;
   grub_addr_t grub_linux_prot_target;
   grub_err_t err;
+
+  grub_puts(  "grub_cmd_linux: loader/i386/pc/linux.c");
 
   grub_dl_ref (my_mod);
 

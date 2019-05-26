@@ -1,3 +1,4 @@
+// Modified by Intuitive Surgical Operations, Inc., April 2016
 /*
  *  GRUB  --  GRand Unified Bootloader
  *  Copyright (C) 2006,2007,2008,2009,2010  Free Software Foundation, Inc.
@@ -327,7 +328,7 @@ grub_linux_setup_video (struct linux_kernel_params *params)
 	  params->lfb_size >>= 16;
 	  params->have_vga = GRUB_VIDEO_LINUX_TYPE_VESA;
 	  break;
-	
+
 	case GRUB_VIDEO_DRIVER_EFI_UGA:
 	case GRUB_VIDEO_DRIVER_EFI_GOP:
 	  params->have_vga = GRUB_VIDEO_LINUX_TYPE_EFIFB;
@@ -621,9 +622,9 @@ grub_linux_boot (void)
 					 &efi_desc_size, &efi_desc_version);
     if (err)
       return err;
-    
+
     /* Note that no boot services are available from here.  */
-    efi_mmap_target = ctx.real_mode_target 
+    efi_mmap_target = ctx.real_mode_target
       + ((grub_uint8_t *) efi_mmap_buf - (grub_uint8_t *) real_mode_mem);
     /* Pass EFI parameters.  */
     if (grub_le_to_cpu16 (ctx.params->version) >= 0x0208)
@@ -686,6 +687,8 @@ grub_cmd_linux (grub_command_t cmd __attribute__ ((unused)),
   grub_size_t align, min_align;
   int relocatable;
   grub_uint64_t preferred_address = GRUB_LINUX_BZIMAGE_ADDR;
+
+  grub_puts("grub_cmd_linux: loader/i386/linux.c");
 
   grub_dl_ref (my_mod);
 
@@ -773,7 +776,7 @@ grub_cmd_linux (grub_command_t cmd __attribute__ ((unused)),
       align = 0;
       relocatable = 0;
     }
-    
+
   if (grub_le_to_cpu16 (lh.version) >= 0x020a)
     {
       min_align = lh.min_alignment;
@@ -847,8 +850,10 @@ grub_cmd_linux (grub_command_t cmd __attribute__ ((unused)),
       ((grub_addr_t) grub_efi_system_table >> 32) != 0)
     return grub_error(GRUB_ERR_BAD_OS,
 		      "kernel does not support 64-bit addressing");
+  grub_puts("GRUB_MACHINE_EFI and __x86_64__ are both defined");
 #endif
 
+  grub_printf("grub_cmd_linux: linux_params.version = %d\n", grub_le_to_cpu16 (linux_params.version));
   if (grub_le_to_cpu16 (linux_params.version) >= 0x0208)
     {
       linux_params.v0208.efi_signature = GRUB_LINUX_EFI_SIGNATURE;

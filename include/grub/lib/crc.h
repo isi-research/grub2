@@ -1,3 +1,4 @@
+// Modified by Intuitive Surgical Operations, Inc., April 2016
 /* crc.h - prototypes for crc */
 /*
  *  GRUB  --  GRand Unified Bootloader
@@ -21,5 +22,6 @@
 #define GRUB_CRC_H	1
 
 grub_uint32_t grub_getcrc32c (grub_uint32_t crc, const void *buf, int size);
+grub_uint16_t grub_getcrc16 (grub_uint16_t crc, const void *buf, int size);
 
 #endif /* ! GRUB_CRC_H */
