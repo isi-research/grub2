@@ -6,6 +6,9 @@ longer used in the product.  To reflect this change, the new patch file
 patch file (grub-isi-patch-161361-194777.patch) with code modification notices
 added.
 
+DIFF:
+https://github.com/isi-research/grub2/compare/2.02-beta3...isi-research:2.02-beta3-isi
+
 CHANGE HISTORY:
 
 r194777
