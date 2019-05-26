@@ -1,0 +1,124 @@
+URL: http://iliad/svn/repos/software/sysg7x/branches/dev/mvp_boot/bootloaders/grub
+
+NOTE: validateimgs and validateimgsig modules have been obsoleted and are no
+longer used in the product.  To reflect this change, the new patch file
+(grub-isi-patch-161361-194777-cleaned.patch) was created based on the original
+patch file (grub-isi-patch-161361-194777.patch) with code modification notices
+added.
+
+CHANGE HISTORY:
+
+r194777
+Tracking ID: * A7X-25253 - Create a customized GRUB image and script to select boot images
+---------------------
+r182549
+Tracking ID: * MARS-83 - Integrate secure boot and golden image fallback mechanism on MVP
+---------------------
+r181446
+Tracking ID: * MARS-64 - GRUB needs to have a progress indication when loading LARGE initramfs
+---------------------
+r172966
+Tracking ID:   Description:  - Merging sysg7x trunk into mvp_boot branch  Test Notes:  - Everything builds, maintapp comes up properly  Reviewer(s):   Release Notes:
+---------------------
+r167159
+Tracking ID: * PLAT-310 - Add openssl (PKCS #1) detached signature verification  to MVP GRUB
+---------------------
+r165816
+Tracking ID: * A7X-25314 - Implement MVP filesystem download
+---------------------
+r165614
+Tracking ID: * A7X-25314 - Implement MVP filesystem download
+---------------------
+r165513
+Tracking ID: * A7X-25314 - Implement MVP filesystem download
+---------------------
+r165461
+Tracking ID: * A7X-25314 - Implement MVP filesystem download
+---------------------
+r165369
+Tracking ID: * A7X-25314 - Implement MVP filesystem download
+---------------------
+r165224
+Tracking ID: * A7X-25314 - Implement MVP filesystem download
+---------------------
+r165187
+Tracking ID: * A7X-25314 - Implement MVP filesystem download
+---------------------
+r164723
+Tracking ID: * A7X-25314 - Implement MVP filesystem download
+---------------------
+r164652
+Tracking ID: * A7X-25314 - Implement MVP filesystem download
+---------------------
+r164463
+Tracking ID: * A7X-25314 - Implement MVP filesystem download
+---------------------
+r164260
+Tracking ID: * A7X-25314 - Implement MVP filesystem download
+---------------------
+r164219
+Tracking ID: * A7X-25314 - Implement MVP filesystem download
+---------------------
+r164194
+Tracking ID: * A7X-25314 - Implement MVP filesystem download
+---------------------
+r164190
+Tracking ID: * A7X-25314 - Implement MVP filesystem download
+---------------------
+r163877
+Tracking ID: * A7X-25314 - Implement MVP filesystem download
+---------------------
+r163858
+Tracking ID: * A7X-2523 - FPGA Integration Sprint 20 Planning
+---------------------
+r163854
+Tracking ID: * A7X-25374 - End to end test of MVP boot sequence on full, installed Ubuntu image
+---------------------
+r163841
+Tracking ID: * A7X-25244 - Create a development branch for MVP boot/update infrastructure
+---------------------
+r163791
+Tracking ID: * A7X-25314 - Implement MVP filesystem download
+---------------------
+r163697
+Tracking ID: A7X-25314
+---------------------
+r163613
+Tracking ID: * A7X-2523 - FPGA Integration Sprint 20 Planning
+---------------------
+r163519
+Tracking ID: * A7X-2523 - FPGA Integration Sprint 20 Planning
+---------------------
+r163494
+Tracking ID: * A7X-25253 - Create a customized GRUB image and script to select boot images
+---------------------
+r163174
+Tracking ID: * A7X-25314 - MVP, integrate .sep file download strategy into GDLA
+---------------------
+r163111
+Tracking ID: * A7X-25314 - MVP, integrate .sep file download strategy into GDLA
+---------------------
+r162760
+Tracking ID: * A7X-25314 - MVP, finalize and implement download strategy
+---------------------
+r162751
+Tracking ID: * A7X-25314 - MVP, finalize and implement download strategy
+---------------------
+r162682
+Tracking ID: * A7X-25314 - MVP, finalize and implement download strategy
+---------------------
+r162186
+Tracking ID: * A7X-25253 - Create a customized GRUB image and script to select boot images
+---------------------
+r162177
+Tracking ID: * A7X-25253 - Create a customized GRUB image and script to select boot images
+---------------------
+r161431
+Tracking ID: * A7X-25253 - Create a customized GRUB image and script to select boot images
+---------------------
+r161361
+Tracking ID: * A7X-25253 - Create a customized GRUB image and script to select boot images
+---------------------
+r161269
+Tracking ID: * A7X-25244 - Create a development branch for MVP boot/update infrastructure
+---------------------
